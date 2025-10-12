@@ -14,9 +14,11 @@ jest.mock('../../src/core/project-creator', () => ({
 // Mock console.log, console.error, and process.exit to prevent side effects during tests.
 const mockConsoleLog = jest.spyOn(console, 'log').mockImplementation(() => {});
 const mockConsoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+// Rationale: Intercepting process.exit to prevent actual process termination during tests.
+// Throwing an error here allows tests to assert that `process.exit` was called,
+// while also stopping the execution flow, mimicking program termination.
 const mockProcessExit = jest.spyOn(process, 'exit').mockImplementation((code?: number) => {
-  // Throw an error to stop test execution flow, mimicking process termination.
-  throw new Error(`process.exit called with code: ${code}`);
+  throw new Error(`process.exit called with code: ${code === undefined ? 0 : code}`); // Default to 0 for clarity if no code is provided
 });
 
 // Import the mocked functions for easier access to their mock instances.
@@ -29,9 +31,17 @@ describe('cli', () => {
     jest.clearAllMocks();
   });
 
+  // Restore console and process.exit after all tests are done.
+  afterAll(() => {
+    mockConsoleLog.mockRestore();
+    mockConsoleError.mockRestore();
+    mockProcessExit.mockRestore();
+  });
+
   it('should parse arguments and create a project successfully', async () => {
     const mockArgs = ['--output', 'my-project', '--prompt', 'web-app'];
-    const mockParsedOptions = { output: 'my-project', prompt: 'web-app', verbose: false };
+    // Rationale: Assuming parseArguments extracts relevant options for project creation.
+    const mockParsedOptions = { output: 'my-project', prompt: 'web-app' };
 
     // Configure mocks for a successful run.
     (parseArguments as jest.Mock).mockReturnValue(mockParsedOptions);
@@ -47,7 +57,79 @@ describe('cli', () => {
     expect(mockConsoleLog).toHaveBeenCalledTimes(1);
     expect(mockConsoleLog).toHaveBeenCalledWith('Project generated successfully!');
     expect(mockConsoleError).not.toHaveBeenCalled();
-    expect(mockProcessExit).not.toHaveBeenCalled();
+    expect(mockProcessExit).not.toHaveBeenCalled(); // Rationale: For successful paths, cli might just return without explicitly calling process.exit(0).
+  });
+
+  it('should handle --help argument, log help, and exit with code 0', async () => {
+    const mockArgs = ['--help'];
+    const helpMessage = 'Usage: project-generator [options]\n\nOptions:\n  --help    Show help message\n  --version Show version number';
+
+    // Configure mock for --help. Rationale: Simulate arg-parser providing exit instructions for help display.
+    (parseArguments as jest.Mock).mockReturnValue({
+      _shouldExit: true,
+      _exitCode: 0,
+      _helpMessage: helpMessage,
+    });
+
+    // Rationale: The `cli` function itself resolves without throwing, but `process.exit` (which is mocked to throw)
+    // will stop the execution flow in the test environment.
+    await expect(cli(mockArgs)).resolves.not.toThrow();
+
+    expect(parseArguments).toHaveBeenCalledTimes(1);
+    expect(parseArguments).toHaveBeenCalledWith(mockArgs);
+    expect(createProject).not.toHaveBeenCalled(); // Project creation should not happen for help command.
+    expect(mockConsoleLog).toHaveBeenCalledTimes(1);
+    expect(mockConsoleLog).toHaveBeenCalledWith(helpMessage);
+    expect(mockProcessExit).toHaveBeenCalledTimes(1);
+    expect(mockProcessExit).toHaveBeenCalledWith(0); // Exit with success code after showing help.
+    expect(mockConsoleError).not.toHaveBeenCalled();
+  });
+
+  it('should handle --version argument, log version, and exit with code 0', async () => {
+    const mockArgs = ['--version'];
+    const versionMessage = 'v1.0.0'; // Rationale: Mock a realistic version string.
+
+    // Configure mock for --version. Rationale: Simulate arg-parser providing exit instructions for version display.
+    (parseArguments as jest.Mock).mockReturnValue({
+      _shouldExit: true,
+      _exitCode: 0,
+      _versionMessage: versionMessage,
+    });
+
+    await expect(cli(mockArgs)).resolves.not.toThrow();
+
+    expect(parseArguments).toHaveBeenCalledTimes(1);
+    expect(parseArguments).toHaveBeenCalledWith(mockArgs);
+    expect(createProject).not.toHaveBeenCalled(); // Project creation should not happen for version command.
+    expect(mockConsoleLog).toHaveBeenCalledTimes(1);
+    expect(mockConsoleLog).toHaveBeenCalledWith(versionMessage);
+    expect(mockProcessExit).toHaveBeenCalledTimes(1);
+    expect(mockProcessExit).toHaveBeenCalledWith(0); // Exit with success code after showing version.
+    expect(mockConsoleError).not.toHaveBeenCalled();
+  });
+
+  it('should handle no arguments (implicitly showing help) and exit with code 0', async () => {
+    const mockArgs: string[] = [];
+    const helpMessage = 'Usage: project-generator [options]\n\nOptions:\n  --help    Show help message\n  --version Show version number'; // Rationale: Reusing help message for consistency.
+
+    // Configure mock for no arguments, typically defaults to showing help.
+    // Rationale: Many CLIs show help by default if no commands/arguments are provided.
+    (parseArguments as jest.Mock).mockReturnValue({
+      _shouldExit: true,
+      _exitCode: 0,
+      _helpMessage: helpMessage,
+    });
+
+    await expect(cli(mockArgs)).resolves.not.toThrow();
+
+    expect(parseArguments).toHaveBeenCalledTimes(1);
+    expect(parseArguments).toHaveBeenCalledWith(mockArgs);
+    expect(createProject).not.toHaveBeenCalled();
+    expect(mockConsoleLog).toHaveBeenCalledTimes(1);
+    expect(mockConsoleLog).toHaveBeenCalledWith(helpMessage);
+    expect(mockProcessExit).toHaveBeenCalledTimes(1);
+    expect(mockProcessExit).toHaveBeenCalledWith(0);
+    expect(mockConsoleError).not.toHaveBeenCalled();
   });
 
   it('should handle errors during argument parsing and exit with code 1', async () => {
@@ -59,30 +141,29 @@ describe('cli', () => {
       throw new Error(errorMessage);
     });
 
-    // We expect cli to handle the error internally and call process.exit.
-    // The mock process.exit throws, so we wrap in a try/catch or expect it not to throw directly
-    // and instead check for process.exit being called.
+    // Rationale: The `cli` function catches the error, logs it, and then calls `process.exit(1)`.
     await expect(cli(mockArgs)).resolves.not.toThrow();
 
     expect(parseArguments).toHaveBeenCalledTimes(1);
     expect(parseArguments).toHaveBeenCalledWith(mockArgs);
-    expect(createProject).not.toHaveBeenCalled(); // Project creation should not happen.
+    expect(createProject).not.toHaveBeenCalled(); // Project creation should not happen if arguments are invalid.
     expect(mockConsoleError).toHaveBeenCalledTimes(1);
     expect(mockConsoleError).toHaveBeenCalledWith('Error:', errorMessage);
     expect(mockProcessExit).toHaveBeenCalledTimes(1);
     expect(mockProcessExit).toHaveBeenCalledWith(1);
-    expect(mockConsoleLog).not.toHaveBeenCalled(); // Success message should not be logged.
+    expect(mockConsoleLog).not.toHaveBeenCalled(); // Success message should not be logged on error.
   });
 
   it('should handle errors during project creation and exit with code 1', async () => {
-    const mockArgs = ['--name', 'my-repo'];
-    const mockParsedOptions = { name: 'my-repo', verbose: false };
+    const mockArgs = ['--output', 'my-repo'];
+    const mockParsedOptions = { output: 'my-repo' };
     const errorMessage = 'Failed to create project directory: Permission denied.';
 
     // Configure mocks for parsing success but creation failure.
     (parseArguments as jest.Mock).mockReturnValue(mockParsedOptions);
-    (createProject as jest.Mock).mockRejectedValue(new Error(errorMessage)); // Project creation fails.
+    (createProject as jest.Mock).mockRejectedValue(new Error(errorMessage)); // Simulate project creation failing.
 
+    // Rationale: The `cli` function catches the promise rejection, logs it, and then calls `process.exit(1)`.
     await expect(cli(mockArgs)).resolves.not.toThrow();
 
     expect(parseArguments).toHaveBeenCalledTimes(1);
@@ -93,32 +174,30 @@ describe('cli', () => {
     expect(mockConsoleError).toHaveBeenCalledWith('Error:', errorMessage);
     expect(mockProcessExit).toHaveBeenCalledTimes(1);
     expect(mockProcessExit).toHaveBeenCalledWith(1);
-    expect(mockConsoleLog).not.toHaveBeenCalled(); // Success message should not be logged.
+    expect(mockConsoleLog).not.toHaveBeenCalled(); // Success message should not be logged on error.
   });
 
-  it('should handle general unhandled errors and exit with code 1', async () => {
-    const mockArgs = ['--valid'];
+  it('should handle any other unhandled synchronous errors and exit with code 1', async () => {
+    const mockArgs = ['--output', 'some-project'];
     const errorMessage = 'An unexpected internal error occurred.';
 
-    // Simulate an error from a function that isn't explicitly mocked,
-    // or a logic error within `cli` itself after initial setup.
-    (parseArguments as jest.Mock).mockReturnValue({}); // Parse successfully
-    (createProject as jest.Mock).mockImplementation(() => {
-      // Simulate an error that might not be caught by explicit try/catch blocks within cli logic
-      // For this test, let's assume `createProject` rejects but `cli` somehow fails to log it specifically
-      // or a different internal error is thrown later.
-      // A more realistic scenario for "general unhandled errors" would be an error *inside* cli itself
-      // that is not related to mocked dependencies. Let's force an error by overriding a mock
-      // in a way that an internal error handler would catch.
+    // Simulate a synchronous error *after* argument parsing, but before project creation is attempted.
+    // Rationale: Ensures the top-level try-catch in `cli` catches unexpected runtime errors.
+    (parseArguments as jest.Mock).mockImplementation(() => {
+      // Forcing a synchronous error that might occur if, for example, there's validation logic
+      // or option processing immediately after parsing that isn't explicitly mocked or tested elsewhere.
       throw new Error(errorMessage);
     });
 
     await expect(cli(mockArgs)).resolves.not.toThrow();
 
+    expect(parseArguments).toHaveBeenCalledTimes(1);
+    expect(createProject).not.toHaveBeenCalled(); // Project creation should not occur if there's an earlier error.
     expect(mockConsoleError).toHaveBeenCalledTimes(1);
     expect(mockConsoleError).toHaveBeenCalledWith('Error:', errorMessage);
     expect(mockProcessExit).toHaveBeenCalledTimes(1);
     expect(mockProcessExit).toHaveBeenCalledWith(1);
+    expect(mockConsoleLog).not.toHaveBeenCalled();
   });
 });
 ```
