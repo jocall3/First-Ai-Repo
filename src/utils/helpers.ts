@@ -8,8 +8,8 @@
 /**
  * Converts a string to a URL-friendly slug.
  * - Converts to lowercase.
- * - Normalizes characters (e.g., 'é' to 'e').
- * - Replaces non-alphanumeric characters (except hyphens) with hyphens.
+ * - Normalizes characters (e.g., 'Ã©' to 'e').
+ * - Replaces spaces, underscores, and other non-alphanumeric characters (except hyphens) with hyphens.
  * - Trims leading/trailing hyphens.
  * - Replaces multiple hyphens with a single hyphen.
  * @param text The input string.
@@ -22,10 +22,11 @@ export function slugify(text: string): string {
         .normalize('NFD') // Normalize the string (e.g., é -> e)
         .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
         .toLowerCase()
-        .trim()
-        .replace(/\s+/g, '-') // Replace spaces with -
-        .replace(/[^\w-]+/g, '') // Remove all non-word chars except hyphens
-        .replace(/--+/g, '-'); // Replace multiple - with single -
+        .trim() // Trim leading/trailing whitespace
+        .replace(/[\s_]+/g, '-') // Rationale: Convert all spaces and underscores to single hyphens for consistent kebab-casing in the slug.
+        .replace(/[^a-z0-9-]+/g, '') // Rationale: After initial conversion, remove any remaining non-alphanumeric (except hyphens) characters to sanitize the slug. Using `a-z0-9` explicitly rather than `\w` ensures no accidental preservation of `_` or other word-like characters in certain environments.
+        .replace(/--+/g, '-') // Rationale: Consolidate multiple hyphens to a single one.
+        .replace(/^-+|-+$/g, ''); // Rationale: Remove any leading or trailing hyphens that might result from previous operations (e.g., if input starts/ends with a non-alphanumeric character).
 }
 
 /**
